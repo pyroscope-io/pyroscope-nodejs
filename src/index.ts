@@ -1,13 +1,13 @@
-import * as pprof from 'pprof'
+import * as pprof from '@datadog/pprof'
 
-import type perftools from 'pprof/proto/profile'
+import type perftools from '@datadog/pprof/proto/profile'
 import debug from 'debug'
 import axios, { AxiosError } from 'axios'
 import FormData from 'form-data'
 
 type TagList = Record<string, any>
 
-const log = debug('pyroscope')
+export const log = debug('pyroscope')
 
 const cloudHostnameSuffix = 'pyroscope.cloud'
 
@@ -21,10 +21,10 @@ export interface PyroscopeConfig {
   configured: boolean
 }
 
-const INTERVAL = 10000
-const SAMPLERATE = 100
+export const INTERVAL = 10000
+export const SAMPLERATE = 100
 
-const config: PyroscopeConfig = {
+export const config: PyroscopeConfig = {
   serverAddress: process.env['PYROSCOPE_SERVER_ADDRESS'],
   appName: process.env['PYROSCOPE_APPLICATION_NAME'] || '',
   sm: undefined,
@@ -137,7 +137,9 @@ export const processProfile = (
   return newProfile
 }
 
-async function uploadProfile(profile: perftools.perftools.profiles.IProfile) {
+export async function uploadProfile(
+  profile: perftools.perftools.profiles.IProfile
+) {
   // Apply labels to all samples
   const newProfile = processProfile(profile)
 
@@ -176,51 +178,7 @@ async function uploadProfile(profile: perftools.perftools.profiles.IProfile) {
   }
 }
 
-// Could be false or a function to stop heap profiling
-let heapProfilingTimer: undefined | NodeJS.Timer = undefined
-let isWallProfilingRunning = false
-
-export async function collectCpu(seconds?: number): Promise<Buffer> {
-  if (!config.configured) {
-    throw 'Pyroscope is not configured. Please call init() first.'
-  }
-
-  try {
-    const profile = await pprof.time.profile({
-      lineNumbers: true,
-      sourceMapper: config.sm,
-      durationMillis: (seconds || 10) * 1000 || INTERVAL,
-      intervalMicros: 10000,
-    })
-
-    const newProfile = processProfile(profile)
-    if (newProfile) {
-      return pprof.encode(newProfile)
-    } else {
-      return Buffer.from('', 'utf8')
-    }
-  } catch (e) {
-    log(e)
-    return Buffer.from('', 'utf8')
-  }
-}
-
-export async function collectHeap(): Promise<Buffer> {
-  if (!config.configured) {
-    throw 'Pyroscope is not configured. Please call init() first.'
-  }
-
-  log('Collecting heap...')
-  const profile = pprof.heap.profile(undefined, config.sm)
-  const newProfile = processProfile(profile)
-  if (newProfile) {
-    return pprof.encode(newProfile)
-  } else {
-    return Buffer.from('', 'utf8')
-  }
-}
-
-function checkConfigured() {
+export function checkConfigured() {
   if (!config.configured) {
     throw 'Pyroscope is not configured. Please call init() first.'
   }
@@ -234,44 +192,6 @@ function checkConfigured() {
   }
 }
 
-export function startWallProfiling(): void {
-  checkConfigured()
-
-  log('Pyroscope has started CPU Profiling')
-  isWallProfilingRunning = true
-
-  const profilingRound = () => {
-    log('Collecting CPU Profile')
-    pprof.time
-      .profile({
-        lineNumbers: true,
-        sourceMapper: config.sm,
-        durationMillis: INTERVAL,
-        intervalMicros: 10000,
-      })
-      .then((profile) => {
-        log('CPU Profile collected')
-        if (isWallProfilingRunning) {
-          setImmediate(profilingRound)
-        }
-        log('CPU Profile uploading')
-        return uploadProfile(profile)
-      })
-      .then((d) => {
-        log('CPU Profile has been uploaded')
-      })
-      .catch((e) => {
-        log(e)
-      })
-  }
-  profilingRound()
-}
-
-// It doesn't stop it immediately, just wait until it ends
-export function stopWallProfiling(): void {
-  isWallProfilingRunning = false
-}
-
 export function start(): void {
   startCpuProfiling()
   startHeapProfiling()
@@ -281,76 +201,57 @@ export function stop(): void {
   stopCpuProfiling()
   stopHeapProfiling()
 }
-
-let isHeapCollectingStarted = false
-
-export function startHeapCollecting() {
-  if (!config.configured) {
-    throw 'Pyroscope is not configured. Please call init() first.'
-  }
-
-  if (isHeapCollectingStarted) {
-    log('Heap collecting is already started')
-    return
-  }
-
-  const intervalBytes = 1024 * 512
-  const stackDepth = 32
-
-  log('Pyroscope has started heap profiling')
-
-  pprof.heap.start(intervalBytes, stackDepth)
-  isHeapCollectingStarted = true
+// CPU Export
+import {
+  startCpuProfiling,
+  stopCpuProfiling,
+  setCpuLabels,
+  getCpuLabels,
+  tagWrapper,
+  tag,
+  collectCpu,
+} from './cpu.js'
+export {
+  startCpuProfiling,
+  stopCpuProfiling,
+  setCpuLabels,
+  getCpuLabels,
+  collectCpu,
+  tagWrapper,
+  tag,
 }
-
-export function startHeapProfiling(): void {
-  checkConfigured()
-
-  if (heapProfilingTimer) {
-    log('Pyroscope has already started heap profiling')
-    return
-  }
-
-  startHeapCollecting()
-
-  heapProfilingTimer = setInterval(() => {
-    log('Collecting heap profile')
-    const profile = pprof.heap.profile(undefined, config.sm)
-    log('Heap profile collected...')
-    uploadProfile(profile).then(() => log('Heap profile uploaded...'))
-  }, INTERVAL)
+// Heap Export
+import {
+  startHeapProfiling,
+  stopHeapProfiling,
+  collectHeap,
+  startHeapCollecting,
+  stopHeapCollecting,
+} from './heap.js'
+export {
+  startHeapProfiling,
+  stopHeapProfiling,
+  collectHeap,
+  startHeapCollecting,
+  stopHeapCollecting,
 }
-
-export function stopHeapCollecting() {
-  pprof.heap.stop()
-  isHeapCollectingStarted = false
-}
-
-export function stopHeapProfiling(): void {
-  if (heapProfilingTimer) {
-    log('Stopping heap profiling')
-    clearInterval(heapProfilingTimer)
-    heapProfilingTimer = undefined
-    stopHeapCollecting()
-  }
-}
-
-export const startCpuProfiling = startWallProfiling
-export const stopCpuProfiling = stopWallProfiling
+// Wall Export
+import { startWallProfiling, stopWallProfiling, collectWall } from './wall.js'
+export { startWallProfiling, stopWallProfiling, collectWall }
 
 import expressMiddleware from './express.js'
 export { expressMiddleware }
 
 export default {
   init,
-  startCpuProfiling: startWallProfiling,
-  stopCpuProfiling: stopWallProfiling,
+  startCpuProfiling,
+  stopCpuProfiling,
   startWallProfiling,
   stopWallProfiling,
   startHeapProfiling,
   stopHeapProfiling,
   collectCpu,
-  collectWall: collectCpu,
+  collectWall,
   collectHeap,
   startHeapCollecting,
   stopHeapCollecting,

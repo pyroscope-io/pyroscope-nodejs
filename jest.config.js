@@ -6,6 +6,9 @@ module.exports = {
   moduleNameMapper: {
     '^@pyroscope/nodejs$': '<rootDir>/src',
       "./express.js": "<rootDir>/src/express.ts",
+      "./cpu.js": "<rootDir>/src/cpu.ts",
+      "./wall.js": "<rootDir>/src/wall.ts",
+      "./heap.js": "<rootDir>/src/heap.ts",
       "./index.js": "<rootDir>/src/index.ts"
   },
   preset: "ts-jest",
